@@ -6,16 +6,11 @@ export type CueAction = {
   [key: string]: StoreValue | undefined;
 };
 
-export type CueOn = {
-  event?: string;
-};
-
 export type CueDef = {
-  id: string;
-  on?: CueOn;
+  on?: string;
+  once?: string;
   when?: StoreSnapshot;
   unless?: StoreSnapshot;
-  play_once?: boolean;
   text: Record<string, string>;
   audio: Record<string, string | undefined>;
   at_start?: CueAction[];
@@ -23,9 +18,14 @@ export type CueDef = {
   set?: StoreSnapshot;
 };
 
+export function cueEvent(cue: { on?: string; once?: string }): string {
+  return cue.once || cue.on || '';
+}
+
 export type Manifest = {
   source_lang: string;
   locales: string[];
+  locale_names?: Record<string, string>;
   cues: CueDef[];
 };
 

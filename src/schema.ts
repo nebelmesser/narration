@@ -5,6 +5,7 @@ import type { CueAction, StoreSnapshot, StoreValue } from './types.ts';
 export type ProjectConfig = {
   source_lang: string;
   locales: string[];
+  locale_names: Record<string, string>;
   openrouter: {
     translate_model: string;
     tts_model: string;
@@ -13,11 +14,10 @@ export type ProjectConfig = {
 };
 
 export type ScenarioCue = {
-  id: string;
-  on?: { event?: string };
+  on?: string;
+  once?: string;
   when?: StoreSnapshot;
   unless?: StoreSnapshot;
-  play_once?: boolean;
   text: string;
   at_start?: CueAction[];
   finally?: CueAction[];
@@ -69,14 +69,32 @@ function asActions(value: unknown): CueAction[] | undefined {
   return out.length ? out : undefined;
 }
 
+function parseLocales(raw: unknown): { locales: string[]; locale_names: Record<string, string> } {
+  if (Array.isArray(raw)) {
+    const locales = raw.map(String);
+    return { locales, locale_names: Object.fromEntries(locales.map((code) => [code, code])) };
+  }
+  if (raw && typeof raw === 'object') {
+    const locales: string[] = [];
+    const locale_names: Record<string, string> = {};
+    for (const [code, name] of Object.entries(raw as Record<string, unknown>)) {
+      locales.push(code);
+      locale_names[code] = typeof name === 'string' && name.trim() ? name.trim() : code;
+    }
+    if (locales.length) return { locales, locale_names };
+  }
+  return { locales: ['ru'], locale_names: { ru: 'Русский' } };
+}
+
 export function parseConfig(raw: string): ProjectConfig {
   const data = YAML.parse(raw) as Record<string, unknown>;
-  const locales = Array.isArray(data.locales) ? data.locales.map(String) : ['ru'];
+  const { locales, locale_names } = parseLocales(data.locales);
   const openrouter = (data.openrouter ?? {}) as Record<string, unknown>;
   const voices = (openrouter.voices ?? {}) as Record<string, string>;
   return {
     source_lang: String(data.source_lang ?? 'ru'),
     locales,
+    locale_names,
     openrouter: {
       translate_model: String(openrouter.translate_model ?? 'anthropic/claude-sonnet-4'),
       tts_model: String(openrouter.tts_model ?? 'openai/gpt-4o-mini-tts-2025-12-15'),
@@ -92,16 +110,14 @@ export function parseScenario(raw: string): ScenarioFile {
   for (const item of cuesRaw) {
     if (!item || typeof item !== 'object') continue;
     const row = item as Record<string, unknown>;
-    if (typeof row.id !== 'string' || typeof row.text !== 'string') continue;
-    const on = row.on && typeof row.on === 'object' && !Array.isArray(row.on)
-      ? { event: typeof (row.on as { event?: unknown }).event === 'string' ? (row.on as { event: string }).event : undefined }
-      : undefined;
+    if (typeof row.text !== 'string') continue;
+    const once = typeof row.once === 'string' ? row.once.trim() : '';
+    const on = typeof row.on === 'string' ? row.on.trim() : '';
+    if (!once && !on) continue;
     cues.push({
-      id: row.id,
-      on,
+      ...(once ? { once } : { on }),
       when: asStore(row.when),
       unless: asStore(row.unless),
-      play_once: row.play_once === true ? true : undefined,
       text: row.text,
       at_start: asActions(row.at_start),
       finally: asActions(row.finally),

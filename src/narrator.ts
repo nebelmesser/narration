@@ -2,14 +2,7 @@ import { cueBecameTrue, cueMatches } from './match.ts';
 import { pickLocale, persistLocale, persistSoundEnabled, readSoundEnabled } from './locale.ts';
 import { mountOverlay, type OverlayHandles } from './overlay.ts';
 import { KvStore } from './store.ts';
-import type {
-  CueAction,
-  CueDef,
-  Manifest,
-  MountOptions,
-  NarratorEventHandler,
-  StoreValue,
-} from './types.ts';
+import { cueEvent, type CueAction, type CueDef, type Manifest, type MountOptions, type NarratorEventHandler, type StoreValue } from './types.ts';
 
 export type Narrator = {
   readonly store: KvStore;
@@ -79,9 +72,12 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
     for (const handler of set) handler(payload);
   };
 
-  const hasId = (id: string): boolean => playing?.cue.id === id || queue.some((cue) => cue.id === id);
+  const hasEvent = (event: string): boolean => (
+    (playing !== null && cueEvent(playing.cue) === event)
+    || queue.some((cue) => cueEvent(cue) === event)
+  );
 
-  const onceDone = (cue: CueDef): boolean => cue.play_once === true && played.has(cue.id);
+  const onceDone = (cue: CueDef): boolean => Boolean(cue.once) && played.has(cueEvent(cue));
 
   const drain = (): void => {
     if (playing) return;
@@ -96,7 +92,7 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
   };
 
   const enqueue = (cue: CueDef): void => {
-    if (hasId(cue.id) || onceDone(cue)) return;
+    if (hasEvent(cueEvent(cue)) || onceDone(cue)) return;
     if (!cueMatches(store.snapshot(), cue.when, cue.unless)) return;
     queue.push(cue);
     drain();
@@ -129,7 +125,7 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
     }, ms);
   };
 
-  const playCurrentAudio = (): void => {
+  const playCurrentAudio = (fromStart = false): void => {
     if (!playing || !overlay) return;
     const text = resolveText(playing.cue, locale, manifest.source_lang);
     const audioUrl = resolveAudio(playing.cue, locale, manifest.source_lang, manifestUrl);
@@ -145,10 +141,19 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
     const state = playing;
     playing.audio = audio;
     const sameSrc = audio.currentSrc === audioUrl || audio.src === audioUrl;
-    if (!sameSrc || audio.ended) {
+    if (!sameSrc || audio.ended || fromStart) {
       audio.onended = null;
       audio.onerror = null;
-      audio.src = audioUrl;
+      if (fromStart && sameSrc && !audio.ended) {
+        audio.pause();
+        try {
+          audio.currentTime = 0;
+        } catch {
+          audio.src = audioUrl;
+        }
+      } else {
+        audio.src = audioUrl;
+      }
     }
     audio.onended = () => {
       if (playing === state) finishPlay();
@@ -161,6 +166,7 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
       overlay?.setLocked(false);
     }).catch(() => {
       unlocked = false;
+      overlay?.setLocked(true);
     });
   };
 
@@ -172,19 +178,19 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
 
   const unlockPlayback = (): void => {
     unlocked = true;
-    overlay?.setLocked(false);
     if (!muted) playCurrentAudio();
   };
 
   const enableSound = (): void => {
     setMutedPref(false);
-    unlockPlayback();
+    unlocked = true;
+    playCurrentAudio(true);
   };
 
   const startCue = (cue: CueDef): void => {
     if (onceDone(cue)) return;
     if (!cueMatches(store.snapshot(), cue.when, cue.unless)) return;
-    if (cue.play_once) played.add(cue.id);
+    if (cue.once) played.add(cueEvent(cue));
     if (cue.set) store.patch(cue.set);
     fireActions(cue.at_start, emitOut);
     const text = resolveText(cue, locale, manifest.source_lang);
@@ -197,8 +203,12 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
   const applyLocale = (next: string, persist: boolean): void => {
     if (!manifest.locales.includes(next)) return;
     locale = next;
-    overlay?.setLocales(manifest.locales, locale);
+    overlay?.setLocales(manifest.locales, locale, manifest.locale_names);
     if (persist) persistLocale(locale);
+    if (playing) {
+      overlay?.setText(resolveText(playing.cue, locale, manifest.source_lang));
+      playCurrentAudio(true);
+    }
   };
 
   try {
@@ -219,7 +229,7 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
     onMute() {
       setMutedPref(!muted);
       if (muted) playing?.audio?.pause();
-      else unlockPlayback();
+      else enableSound();
     },
     onUnlock() {
       enableSound();
@@ -228,14 +238,14 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
       applyLocale(next, true);
     },
   });
-  overlay.setLocales(manifest.locales, locale);
+  overlay.setLocales(manifest.locales, locale, manifest.locale_names);
   persistSoundEnabled(!muted);
-  overlay.setLocked(false);
   overlay.setMuted(muted);
+  overlay.setLocked(!unlocked);
 
   const onFirstGesture = (event: Event): void => {
     const target = event.target;
-    if (target instanceof Element && target.closest('.narration-chrome')) return;
+    if (target instanceof Element && target.closest('#narration-locale, .narration-sound')) return;
     unlockPlayback();
     window.removeEventListener('pointerdown', onFirstGesture, true);
     window.removeEventListener('keydown', onFirstGesture, true);
@@ -245,7 +255,7 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
 
   const stopStore = store.subscribe((prev, next) => {
     for (const cue of manifest.cues) {
-      if (cue.on?.event) continue;
+      if (!cue.when && !cue.unless) continue;
       if (cueBecameTrue(prev, next, cue.when, cue.unless)) enqueue(cue);
     }
   });
@@ -254,7 +264,7 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
     store,
     emit(name: string) {
       for (const cue of manifest.cues) {
-        if (cue.on?.event === name) enqueue(cue);
+        if (cueEvent(cue) === name) enqueue(cue);
       }
     },
     on(name: string, handler: NarratorEventHandler) {

@@ -3,15 +3,15 @@ const STYLE_ID = 'narration-overlay-style';
 const CSS = `
 #narration-overlay {
   position: fixed;
-  left: 50%;
+  left: 0;
+  right: 0;
   bottom: max(16px, env(safe-area-inset-bottom));
-  transform: translateX(-50%);
   z-index: 40;
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 8px;
   width: min(42rem, calc(100vw - 32px));
+  margin: 0 auto;
   pointer-events: none;
   font-family: system-ui, sans-serif;
 }
@@ -19,6 +19,9 @@ const CSS = `
   display: none;
 }
 .narration-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 0;
   padding: 10px 14px;
   border-radius: 10px;
@@ -26,34 +29,56 @@ const CSS = `
   color: #f2f2f2;
   font-size: 15px;
   line-height: 1.35;
-  text-align: center;
   pointer-events: none;
 }
-.narration-chrome {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  pointer-events: auto;
+.narration-text {
+  flex: 1;
+  margin: 0;
+  text-align: center;
 }
-.narration-chrome button,
-.narration-chrome select {
+.narration-sound {
+  flex-shrink: 0;
   appearance: none;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  background: rgba(12, 12, 12, 0.78);
-  color: #eee;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.12);
+  color: #f2f2f2;
   border-radius: 8px;
-  padding: 4px 8px;
+  padding: 6px 10px;
   font: inherit;
   font-size: 12px;
+  line-height: 1.2;
   cursor: pointer;
+  pointer-events: auto;
+  white-space: nowrap;
 }
-.narration-chrome button.is-on {
-  border-color: #8ec5ff;
+.narration-sound[hidden] {
+  display: none;
+}
+#narration-locale {
+  appearance: none;
+  position: fixed;
+  top: max(var(--ctrl-inset, 12px), env(safe-area-inset-top));
+  right: calc(max(var(--ctrl-inset, 12px), env(safe-area-inset-right)) + var(--ctrl-size, 36px) + var(--ctrl-gap, 10px));
+  z-index: 6;
+  height: var(--ctrl-size, 36px);
+  padding: 0 10px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.28));
+  border-radius: var(--ctrl-radius, 8px);
+  background: var(--panel, rgba(12, 12, 12, 0.78));
+  color: var(--fg, #eee);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  pointer-events: auto;
 }
 #narration-overlay audio {
   display: none;
 }
 `;
+
+function enableSoundLabel(locale: string): string {
+  return locale === 'ru' ? 'Включить звук' : 'Enable sound';
+}
 
 export type OverlayHandles = {
   root: HTMLElement;
@@ -61,7 +86,7 @@ export type OverlayHandles = {
   setText(text: string): void;
   setMuted(muted: boolean): void;
   setLocked(locked: boolean): void;
-  setLocales(locales: string[], current: string): void;
+  setLocales(locales: string[], current: string, names?: Record<string, string>): void;
   destroy(): void;
 };
 
@@ -81,31 +106,41 @@ export function mountOverlay(options: {
   root.id = 'narration-overlay';
   root.className = 'is-empty';
 
-  const line = document.createElement('p');
+  const line = document.createElement('div');
   line.className = 'narration-line';
-  line.setAttribute('aria-live', 'polite');
 
-  const chrome = document.createElement('div');
-  chrome.className = 'narration-chrome';
+  const text = document.createElement('p');
+  text.className = 'narration-text';
+  text.setAttribute('aria-live', 'polite');
 
   const mute = document.createElement('button');
   mute.type = 'button';
-  mute.textContent = 'Sound off';
-  mute.setAttribute('aria-label', 'Toggle narration sound');
+  mute.className = 'narration-sound';
+  mute.textContent = 'Enable sound';
+  mute.setAttribute('aria-label', 'Enable narration sound');
 
   const locale = document.createElement('select');
+  locale.id = 'narration-locale';
   locale.setAttribute('aria-label', 'Narration language');
+  locale.setAttribute('data-viewer-ui', '');
 
   const audio = document.createElement('audio');
   audio.setAttribute('aria-hidden', 'true');
   audio.preload = 'auto';
 
-  chrome.append(mute, locale);
-  root.append(line, chrome, audio);
-  document.body.append(root);
+  line.append(text, mute);
+  root.append(line, audio);
+  document.body.append(root, locale);
+
+  let uiLocale = 'en';
+  const syncSoundButton = (): void => {
+    const show = mute.dataset.muted === '1' || mute.dataset.locked === '1';
+    mute.hidden = !show;
+    mute.textContent = enableSoundLabel(uiLocale);
+  };
 
   mute.addEventListener('click', () => {
-    if (mute.dataset.locked === '1') options.onUnlock();
+    if (mute.dataset.locked === '1' || mute.dataset.muted === '1') options.onUnlock();
     else options.onMute();
   });
   locale.addEventListener('change', () => options.onLocale(locale.value));
@@ -113,39 +148,34 @@ export function mountOverlay(options: {
   return {
     root,
     audio,
-    setText(text: string) {
-      line.textContent = text;
-      root.classList.toggle('is-empty', !text);
+    setText(next: string) {
+      text.textContent = next;
+      root.classList.toggle('is-empty', !next);
     },
     setMuted(muted: boolean) {
       mute.dataset.muted = muted ? '1' : '0';
-      if (mute.dataset.locked === '1') return;
-      mute.textContent = muted ? 'Sound off' : 'Sound on';
-      mute.classList.toggle('is-on', !muted);
+      syncSoundButton();
     },
     setLocked(locked: boolean) {
       mute.dataset.locked = locked ? '1' : '0';
-      if (locked) {
-        mute.textContent = 'Enable sound';
-        mute.classList.remove('is-on');
-        return;
-      }
-      mute.textContent = mute.dataset.muted === '1' ? 'Sound off' : 'Sound on';
-      mute.classList.toggle('is-on', mute.dataset.muted !== '1');
+      syncSoundButton();
     },
-    setLocales(locales: string[], current: string) {
+    setLocales(locales: string[], current: string, names: Record<string, string> = {}) {
+      uiLocale = current;
       locale.replaceChildren();
       for (const code of locales) {
         const option = document.createElement('option');
         option.value = code;
-        option.textContent = code;
+        option.textContent = names[code] || code;
         option.selected = code === current;
         locale.append(option);
       }
       locale.value = current;
+      syncSoundButton();
     },
     destroy() {
       root.remove();
+      locale.remove();
     },
   };
 }

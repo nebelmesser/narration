@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import YAML from 'yaml';
-import type { CueDef, Manifest } from './types.ts';
+import { cueEvent, type CueDef, type Manifest } from './types.ts';
 import type { LocaleFile } from './validate.ts';
 import type { ProjectConfig, ScenarioFile } from './schema.ts';
 
@@ -18,20 +18,20 @@ export function buildManifest(
   locales: Record<string, LocaleFile>,
 ): Manifest {
   const cues: CueDef[] = scenario.cues.map((cue) => {
+    const event = cueEvent(cue);
     const text: Record<string, string> = {};
     const audio: Record<string, string | undefined> = {};
     for (const locale of config.locales) {
-      const entry = locales[locale]?.[cue.id];
+      const entry = locales[locale]?.[event];
       if (entry?.text) text[locale] = entry.text;
-      audio[locale] = `audio/${locale}/${cue.id}.mp3`;
+      audio[locale] = `audio/${locale}/${event}.mp3`;
     }
     if (!text[config.source_lang]) text[config.source_lang] = cue.text;
     return {
-      id: cue.id,
       on: cue.on,
+      once: cue.once,
       when: cue.when,
       unless: cue.unless,
-      play_once: cue.play_once || undefined,
       text,
       audio,
       at_start: cue.at_start,
@@ -42,6 +42,7 @@ export function buildManifest(
   return {
     source_lang: config.source_lang,
     locales: config.locales,
+    locale_names: config.locale_names,
     cues,
   };
 }

@@ -9,6 +9,7 @@ export {
   readSoundEnabled,
 } from './locale.ts';
 export { cueBecameTrue, cueMatches } from './match.ts';
+export { cueEvent } from './types.ts';
 export type {
   CueAction,
   CueDef,

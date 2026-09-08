@@ -6,6 +6,7 @@ import YAML from 'yaml';
 import { buildManifest, writeLocaleYaml, writeManifest } from './compile.ts';
 import { sha256 } from './hash.ts';
 import { parseConfig, parseScenario, type ProjectConfig, type ScenarioFile } from './schema.ts';
+import { cueEvent } from './types.ts';
 import { translateLocale } from './translate.ts';
 import { synthesizeSpeech } from './tts.ts';
 import type { LocaleFile } from './validate.ts';
@@ -88,8 +89,9 @@ export async function syncProject(options: SyncOptions): Promise<void> {
 
   const sourceLocale = locales[config.source_lang] ?? (locales[config.source_lang] = {});
   for (const cue of scenario.cues) {
-    const prev = sourceLocale[cue.id];
-    sourceLocale[cue.id] = { text: cue.text, frozen: prev?.frozen };
+    const event = cueEvent(cue);
+    const prev = sourceLocale[event];
+    sourceLocale[event] = { text: cue.text, frozen: prev?.frozen };
   }
 
   const changed: Record<string, string[]> = {};
@@ -98,13 +100,14 @@ export async function syncProject(options: SyncOptions): Promise<void> {
     changed[locale] = [];
     const file = locales[locale] ?? (locales[locale] = {});
     for (const cue of scenario.cues) {
+      const event = cueEvent(cue);
       const sourceHash = sha256(cue.text);
-      const locked = lock.cues[cue.id];
+      const locked = lock.cues[event];
       const sourceChanged = locked?.sourceHash !== sourceHash;
-      const missing = !file[cue.id]?.text;
-      const forced = forceMatch(options.forceIds, cue.id);
-      if (file[cue.id]?.frozen && !forced) continue;
-      if (missing || sourceChanged || forced) changed[locale].push(cue.id);
+      const missing = !file[event]?.text;
+      const forced = forceMatch(options.forceIds, event);
+      if (file[event]?.frozen && !forced) continue;
+      if (missing || sourceChanged || forced) changed[locale].push(event);
     }
   }
 
@@ -127,7 +130,7 @@ export async function syncProject(options: SyncOptions): Promise<void> {
         if (!ids.length) continue;
         const sources: Record<string, { source: string; existing?: string }> = {};
         for (const id of ids) {
-          const cue = scenario.cues.find((item) => item.id === id);
+          const cue = scenario.cues.find((item) => cueEvent(item) === id);
           if (!cue) continue;
           const existing = locales[locale][id]?.text;
           sources[id] = existing ? { source: cue.text, existing } : { source: cue.text };
@@ -149,14 +152,15 @@ export async function syncProject(options: SyncOptions): Promise<void> {
 
   for (const locale of config.locales) {
     for (const cue of scenario.cues) {
-      const text = locales[locale][cue.id]?.text;
+      const event = cueEvent(cue);
+      const text = locales[locale][event]?.text;
       if (!text) continue;
       const textHash = sha256(text);
-      const previous = lock.cues[cue.id]?.locales[locale]?.textHash;
-      const audioPath = join(dir, 'audio', locale, `${cue.id}.mp3`);
-      const forced = forceMatch(options.forceIds, cue.id);
+      const previous = lock.cues[event]?.locales[locale]?.textHash;
+      const audioPath = join(dir, 'audio', locale, `${event}.mp3`);
+      const forced = forceMatch(options.forceIds, event);
       if (previous !== textHash || !existsSync(audioPath) || forced) {
-        ttsNeeded.push({ locale, id: cue.id, text });
+        ttsNeeded.push({ locale, id: event, text });
       }
     }
   }
@@ -188,26 +192,28 @@ export async function syncProject(options: SyncOptions): Promise<void> {
   for (const locale of config.locales) {
     const keep: LocaleFile = {};
     for (const cue of scenario.cues) {
-      if (locales[locale][cue.id]) keep[cue.id] = locales[locale][cue.id];
+      const event = cueEvent(cue);
+      if (locales[locale][event]) keep[event] = locales[locale][event];
     }
     writeLocaleYaml(join(dir, 'i18n', `${locale}.yaml`), keep);
   }
 
   const nextLock: LockFile = { cues: {} };
   for (const cue of scenario.cues) {
+    const event = cueEvent(cue);
     const localesLock: Record<string, { textHash: string }> = {};
     for (const locale of config.locales) {
-      const text = locales[locale][cue.id]?.text;
+      const text = locales[locale][event]?.text;
       if (text) localesLock[locale] = { textHash: sha256(text) };
     }
-    nextLock.cues[cue.id] = { sourceHash: sha256(cue.text), locales: localesLock };
+    nextLock.cues[event] = { sourceHash: sha256(cue.text), locales: localesLock };
   }
   writeFileSync(lockPath, `${JSON.stringify(nextLock, null, 2)}\n`);
 
   const manifest = buildManifest(config, scenario, locales);
   for (const cue of manifest.cues) {
     for (const locale of config.locales) {
-      const audioPath = join(dir, 'audio', locale, `${cue.id}.mp3`);
+      const audioPath = join(dir, 'audio', locale, `${cueEvent(cue)}.mp3`);
       if (!existsSync(audioPath)) delete cue.audio[locale];
     }
   }
