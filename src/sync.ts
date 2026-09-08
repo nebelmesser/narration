@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OpenRouter } from '@openrouter/sdk';
 import YAML from 'yaml';
-import { buildManifest, writeLocaleYaml, writeManifest } from './compile.ts';
+import { buildManifest, writeLocaleYaml, writeManifest, writeUiJson } from './compile.ts';
 import { sha256 } from './hash.ts';
 import { parseConfig, parseScenario, type ProjectConfig, type ScenarioFile } from './schema.ts';
 import { cueEvent } from './types.ts';
@@ -15,6 +15,7 @@ export type SyncOptions = {
   dir: string;
   dryRun?: boolean;
   forceIds?: string[] | true;
+  sourceOnly?: boolean;
 };
 
 type LockFile = {
@@ -69,7 +70,32 @@ function loadPrompt(dir: string): string {
 
 function forceMatch(force: SyncOptions['forceIds'], id: string): boolean {
   if (force === true) return true;
-  return Array.isArray(force) && force.includes(id);
+  if (!Array.isArray(force)) return false;
+  if (force.includes(id)) return true;
+  if (id.startsWith('ui.') && force.includes(id.slice(3))) return true;
+  return false;
+}
+
+function flattenUiSource(value: unknown, prefix = ''): Record<string, string> {
+  if (typeof value === 'string' && value.trim() && prefix) return { [prefix]: value };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    const id = prefix ? `${prefix}.${key}` : key;
+    if (typeof item === 'string' && item.trim()) out[id] = item;
+    else Object.assign(out, flattenUiSource(item, id));
+  }
+  return out;
+}
+
+function readUiSource(path: string): Record<string, string> {
+  if (!existsSync(path)) return {};
+  const parsed = YAML.parse(readFileSync(path, 'utf8')) as unknown;
+  return flattenUiSource(parsed);
+}
+
+function uiKey(id: string): string {
+  return `ui.${id}`;
 }
 
 export async function syncProject(options: SyncOptions): Promise<void> {
@@ -94,28 +120,39 @@ export async function syncProject(options: SyncOptions): Promise<void> {
     sourceLocale[event] = { text: cue.text, frozen: prev?.frozen };
   }
 
+  const uiSource = readUiSource(join(dir, 'ui.yaml'));
+  const uiIds = Object.keys(uiSource);
+  for (const id of uiIds) {
+    const key = uiKey(id);
+    const prev = sourceLocale[key];
+    sourceLocale[key] = { text: uiSource[id], frozen: prev?.frozen };
+  }
+
+  const allIds = [...scenario.cues.map((cue) => cueEvent(cue)), ...uiIds.map(uiKey)];
+
   const changed: Record<string, string[]> = {};
   for (const locale of config.locales) {
     if (locale === config.source_lang) continue;
     changed[locale] = [];
     const file = locales[locale] ?? (locales[locale] = {});
-    for (const cue of scenario.cues) {
-      const event = cueEvent(cue);
-      const sourceHash = sha256(cue.text);
-      const locked = lock.cues[event];
+    for (const id of allIds) {
+      const sourceText = sourceLocale[id]?.text;
+      if (!sourceText) continue;
+      const sourceHash = sha256(sourceText);
+      const locked = lock.cues[id];
       const sourceChanged = locked?.sourceHash !== sourceHash;
-      const missing = !file[event]?.text;
-      const forced = forceMatch(options.forceIds, event);
-      if (file[event]?.frozen && !forced) continue;
-      if (missing || sourceChanged || forced) changed[locale].push(event);
+      const missing = !file[id]?.text;
+      const forced = forceMatch(options.forceIds, id);
+      if (file[id]?.frozen && !forced) continue;
+      if (missing || sourceChanged || forced) changed[locale].push(id);
     }
   }
 
   const ttsNeeded: Array<{ locale: string; id: string; text: string }> = [];
-  const apiNeeded = Object.values(changed).some((ids) => ids.length > 0);
+  const apiNeeded = !options.sourceOnly && Object.values(changed).some((ids) => ids.length > 0);
 
   if (options.dryRun) {
-    console.log(JSON.stringify({ changed, tts: 'after translation' }, null, 2));
+    console.log(JSON.stringify({ changed, tts: options.sourceOnly ? 'skipped' : 'after translation', sourceOnly: Boolean(options.sourceOnly) }, null, 2));
     return;
   }
 
@@ -130,10 +167,10 @@ export async function syncProject(options: SyncOptions): Promise<void> {
         if (!ids.length) continue;
         const sources: Record<string, { source: string; existing?: string }> = {};
         for (const id of ids) {
-          const cue = scenario.cues.find((item) => cueEvent(item) === id);
-          if (!cue) continue;
+          const sourceText = sourceLocale[id]?.text;
+          if (!sourceText) continue;
           const existing = locales[locale][id]?.text;
-          sources[id] = existing ? { source: cue.text, existing } : { source: cue.text };
+          sources[id] = existing ? { source: sourceText, existing } : { source: sourceText };
         }
         const translated = await translateLocale({
           client,
@@ -150,17 +187,19 @@ export async function syncProject(options: SyncOptions): Promise<void> {
     }
   }
 
-  for (const locale of config.locales) {
-    for (const cue of scenario.cues) {
-      const event = cueEvent(cue);
-      const text = locales[locale][event]?.text;
-      if (!text) continue;
-      const textHash = sha256(text);
-      const previous = lock.cues[event]?.locales[locale]?.textHash;
-      const audioPath = join(dir, 'audio', locale, `${event}.mp3`);
-      const forced = forceMatch(options.forceIds, event);
-      if (previous !== textHash || !existsSync(audioPath) || forced) {
-        ttsNeeded.push({ locale, id: event, text });
+  if (!options.sourceOnly) {
+    for (const locale of config.locales) {
+      for (const cue of scenario.cues) {
+        const event = cueEvent(cue);
+        const text = locales[locale][event]?.text;
+        if (!text) continue;
+        const textHash = sha256(text);
+        const previous = lock.cues[event]?.locales[locale]?.textHash;
+        const audioPath = join(dir, 'audio', locale, `${event}.mp3`);
+        const forced = forceMatch(options.forceIds, event);
+        if (previous !== textHash || !existsSync(audioPath) || forced) {
+          ttsNeeded.push({ locale, id: event, text });
+        }
       }
     }
   }
@@ -191,31 +230,41 @@ export async function syncProject(options: SyncOptions): Promise<void> {
   mkdirSync(join(dir, 'i18n'), { recursive: true });
   for (const locale of config.locales) {
     const keep: LocaleFile = {};
-    for (const cue of scenario.cues) {
-      const event = cueEvent(cue);
-      if (locales[locale][event]) keep[event] = locales[locale][event];
+    for (const id of allIds) {
+      if (locales[locale][id]) keep[id] = locales[locale][id];
     }
     writeLocaleYaml(join(dir, 'i18n', `${locale}.yaml`), keep);
   }
 
-  const nextLock: LockFile = { cues: {} };
-  for (const cue of scenario.cues) {
-    const event = cueEvent(cue);
-    const localesLock: Record<string, { textHash: string }> = {};
-    for (const locale of config.locales) {
-      const text = locales[locale][event]?.text;
-      if (text) localesLock[locale] = { textHash: sha256(text) };
+  if (!options.sourceOnly) {
+    const nextLock: LockFile = { cues: {} };
+    for (const id of allIds) {
+      const localesLock: Record<string, { textHash: string }> = {};
+      for (const locale of config.locales) {
+        const text = locales[locale][id]?.text;
+        if (text) localesLock[locale] = { textHash: sha256(text) };
+      }
+      const sourceText = sourceLocale[id]?.text;
+      if (!sourceText) continue;
+      nextLock.cues[id] = { sourceHash: sha256(sourceText), locales: localesLock };
     }
-    nextLock.cues[event] = { sourceHash: sha256(cue.text), locales: localesLock };
+    writeFileSync(lockPath, `${JSON.stringify(nextLock, null, 2)}\n`);
   }
-  writeFileSync(lockPath, `${JSON.stringify(nextLock, null, 2)}\n`);
 
+  const scenarioText = new Map(scenario.cues.map((cue) => [cueEvent(cue), cue.text]));
   const manifest = buildManifest(config, scenario, locales);
   for (const cue of manifest.cues) {
+    const event = cueEvent(cue);
+    const sourceChanged = options.sourceOnly
+      && lock.cues[event]?.sourceHash !== sha256(scenarioText.get(event) ?? '');
     for (const locale of config.locales) {
-      const audioPath = join(dir, 'audio', locale, `${cueEvent(cue)}.mp3`);
-      if (!existsSync(audioPath)) delete cue.audio[locale];
+      const audioPath = join(dir, 'audio', locale, `${event}.mp3`);
+      if (sourceChanged || !existsSync(audioPath)) delete cue.audio[locale];
     }
   }
   writeManifest(dir, manifest);
+  if (uiIds.length) writeUiJson(dir, config, uiIds, locales);
+  if (options.sourceOnly) {
+    console.log('source-only: updated manifest and source locale without translation or TTS');
+  }
 }

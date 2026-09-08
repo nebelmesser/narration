@@ -10,6 +10,8 @@ export type Narrator = {
   on(name: string, handler: NarratorEventHandler): () => void;
   off(name: string, handler: NarratorEventHandler): void;
   setLocale(locale: string): void;
+  setUi(ui: { enableSound?: string }): void;
+  reset(): void;
   destroy(): void;
 };
 
@@ -118,6 +120,15 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
     drain();
   };
 
+  const stopPlayback = (): void => {
+    if (!playing) return;
+    if (playing.timer) window.clearTimeout(playing.timer);
+    stopAudio(playing.audio);
+    fireActions(playing.cue.finally, emitOut);
+    playing = null;
+    overlay?.setText('');
+  };
+
   const armTimer = (state: PlayState, ms: number): void => {
     if (state.timer) window.clearTimeout(state.timer);
     state.timer = window.setTimeout(() => {
@@ -202,10 +213,11 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
 
   const applyLocale = (next: string, persist: boolean): void => {
     if (!manifest.locales.includes(next)) return;
+    const changed = locale !== next;
     locale = next;
     overlay?.setLocales(manifest.locales, locale, manifest.locale_names);
     if (persist) persistLocale(locale);
-    if (playing) {
+    if (changed && playing) {
       overlay?.setText(resolveText(playing.cue, locale, manifest.source_lang));
       playCurrentAudio(true);
     }
@@ -226,6 +238,7 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
   persistLocale(locale);
 
   overlay = mountOverlay({
+    enableSoundLabel: options.ui?.enableSound,
     onMute() {
       setMutedPref(!muted);
       if (muted) playing?.audio?.pause();
@@ -260,6 +273,16 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
     }
   });
 
+  const pageOrigin = performance.now();
+  let lastPageSec = 0;
+  const pageTimer = window.setInterval(() => {
+    const sec = Math.max(0, Math.floor((performance.now() - pageOrigin) / 1000));
+    if (sec <= lastPageSec) return;
+    const until = Math.min(sec, lastPageSec + 120);
+    for (let n = lastPageSec + 1; n <= until; n++) store.set('page_sec', n);
+    lastPageSec = until;
+  }, 250);
+
   const api: Narrator = {
     store,
     emit(name: string) {
@@ -282,7 +305,16 @@ export async function mountNarrator(options: MountOptions = {}): Promise<Narrato
     setLocale(next: string) {
       applyLocale(next, true);
     },
+    setUi(ui) {
+      if (ui.enableSound) overlay?.setEnableSoundLabel(ui.enableSound);
+    },
+    reset() {
+      stopPlayback();
+      queue.length = 0;
+      played.clear();
+    },
     destroy() {
+      window.clearInterval(pageTimer);
       stopStore();
       if (playing) {
         if (playing.timer) window.clearTimeout(playing.timer);

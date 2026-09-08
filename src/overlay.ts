@@ -76,16 +76,13 @@ const CSS = `
 }
 `;
 
-function enableSoundLabel(locale: string): string {
-  return locale === 'ru' ? 'Включить звук' : 'Enable sound';
-}
-
 export type OverlayHandles = {
   root: HTMLElement;
   audio: HTMLAudioElement;
   setText(text: string): void;
   setMuted(muted: boolean): void;
   setLocked(locked: boolean): void;
+  setEnableSoundLabel(label: string): void;
   setLocales(locales: string[], current: string, names?: Record<string, string>): void;
   destroy(): void;
 };
@@ -94,6 +91,7 @@ export function mountOverlay(options: {
   onMute(): void;
   onUnlock(): void;
   onLocale(locale: string): void;
+  enableSoundLabel?: string;
 }): OverlayHandles {
   if (!document.getElementById(STYLE_ID)) {
     const style = document.createElement('style');
@@ -116,13 +114,20 @@ export function mountOverlay(options: {
   const mute = document.createElement('button');
   mute.type = 'button';
   mute.className = 'narration-sound';
-  mute.textContent = 'Enable sound';
-  mute.setAttribute('aria-label', 'Enable narration sound');
+  let enableSoundLabel = options.enableSoundLabel || 'Enable sound';
+  mute.textContent = enableSoundLabel;
+  mute.setAttribute('aria-label', enableSoundLabel);
 
-  const locale = document.createElement('select');
-  locale.id = 'narration-locale';
-  locale.setAttribute('aria-label', 'Narration language');
-  locale.setAttribute('data-viewer-ui', '');
+  const existingLocale = document.getElementById('narration-locale');
+  const ownedLocale = !(existingLocale instanceof HTMLSelectElement);
+  const locale = existingLocale instanceof HTMLSelectElement
+    ? existingLocale
+    : document.createElement('select');
+  if (ownedLocale) {
+    locale.id = 'narration-locale';
+    locale.setAttribute('aria-label', 'Language');
+    locale.setAttribute('data-viewer-ui', '');
+  }
 
   const audio = document.createElement('audio');
   audio.setAttribute('aria-hidden', 'true');
@@ -130,20 +135,23 @@ export function mountOverlay(options: {
 
   line.append(text, mute);
   root.append(line, audio);
-  document.body.append(root, locale);
+  document.body.append(root);
+  if (ownedLocale) document.body.append(locale);
 
-  let uiLocale = 'en';
   const syncSoundButton = (): void => {
     const show = mute.dataset.muted === '1' || mute.dataset.locked === '1';
     mute.hidden = !show;
-    mute.textContent = enableSoundLabel(uiLocale);
+    mute.textContent = enableSoundLabel;
+    mute.setAttribute('aria-label', enableSoundLabel);
   };
 
   mute.addEventListener('click', () => {
     if (mute.dataset.locked === '1' || mute.dataset.muted === '1') options.onUnlock();
     else options.onMute();
   });
-  locale.addEventListener('change', () => options.onLocale(locale.value));
+  if (ownedLocale) {
+    locale.addEventListener('change', () => options.onLocale(locale.value));
+  }
 
   return {
     root,
@@ -160,22 +168,27 @@ export function mountOverlay(options: {
       mute.dataset.locked = locked ? '1' : '0';
       syncSoundButton();
     },
+    setEnableSoundLabel(label: string) {
+      enableSoundLabel = label;
+      syncSoundButton();
+    },
     setLocales(locales: string[], current: string, names: Record<string, string> = {}) {
-      uiLocale = current;
-      locale.replaceChildren();
-      for (const code of locales) {
-        const option = document.createElement('option');
-        option.value = code;
-        option.textContent = names[code] || code;
-        option.selected = code === current;
-        locale.append(option);
+      if (ownedLocale) {
+        locale.replaceChildren();
+        for (const code of locales) {
+          const option = document.createElement('option');
+          option.value = code;
+          option.textContent = names[code] || code;
+          option.selected = code === current;
+          locale.append(option);
+        }
       }
       locale.value = current;
       syncSoundButton();
     },
     destroy() {
       root.remove();
-      locale.remove();
+      if (ownedLocale) locale.remove();
     },
   };
 }

@@ -29,7 +29,7 @@ export async function translateLocale(options: {
   const ids = Object.keys(options.sources);
   const payload = YAML.stringify({
     locale: options.locale,
-    cues: options.sources,
+    entries: options.sources,
   });
   const messages: Turn[] = [
     { role: 'user', content: `${options.prompt.trim()}\n\n${payload}` },

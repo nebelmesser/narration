@@ -1,6 +1,6 @@
 Target locale is in the payload as `locale`.
-Input YAML maps cue ids to `{ source }` and optionally `{ existing }`.
-Output YAML only: the same cue ids as a map of `{ text }`.
+Input YAML maps ids to `{ source }` and optionally `{ existing }`.
+Output YAML only: the same ids as a map of `{ text }`.
 `text` is the translation of `source` into the target locale.
 Do not add, drop, or rename ids.
 Do not wrap the document in a root key.

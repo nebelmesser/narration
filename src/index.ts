@@ -15,6 +15,7 @@ export type {
   CueDef,
   Manifest,
   MountOptions,
+  NarrationUi,
   NarratorEventHandler,
   StoreSnapshot,
   StoreValue,

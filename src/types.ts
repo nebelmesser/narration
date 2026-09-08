@@ -31,6 +31,11 @@ export type Manifest = {
 
 export type NarratorEventHandler = (payload: Record<string, StoreValue | undefined>) => void;
 
+export type NarrationUi = {
+  enableSound?: string;
+};
+
 export type MountOptions = {
   manifestUrl?: string | URL;
+  ui?: NarrationUi;
 };

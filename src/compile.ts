@@ -50,3 +50,26 @@ export function buildManifest(
 export function writeManifest(dir: string, manifest: Manifest): void {
   writeFileSync(join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 }
+
+export function writeUiJson(
+  dir: string,
+  config: ProjectConfig,
+  uiIds: string[],
+  locales: Record<string, LocaleFile>,
+): void {
+  const strings: Record<string, Record<string, string>> = {};
+  for (const locale of config.locales) {
+    const row: Record<string, string> = {};
+    for (const id of uiIds) {
+      const text = locales[locale]?.[`ui.${id}`]?.text;
+      if (text) row[id] = text;
+    }
+    strings[locale] = row;
+  }
+  writeFileSync(join(dir, 'ui.json'), `${JSON.stringify({
+    source_lang: config.source_lang,
+    locales: config.locales,
+    locale_names: config.locale_names,
+    strings,
+  }, null, 2)}\n`);
+}
