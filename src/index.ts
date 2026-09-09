@@ -9,8 +9,10 @@ export {
   readSoundEnabled,
 } from './locale.ts';
 export { cueBecameTrue, cueMatches } from './match.ts';
+export { spokenText } from './spoken.ts';
 export { cueEvent } from './types.ts';
 export type {
+  CompareCond,
   CueAction,
   CueDef,
   Manifest,
@@ -19,4 +21,6 @@ export type {
   NarratorEventHandler,
   StoreSnapshot,
   StoreValue,
+  WhenSnapshot,
+  WhenValue,
 } from './types.ts';

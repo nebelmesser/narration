@@ -2,6 +2,7 @@ import { cueBecameTrue, cueMatches } from './match.ts';
 import { pickLocale, persistLocale, persistSoundEnabled, readSoundEnabled } from './locale.ts';
 import { mountOverlay, type OverlayHandles } from './overlay.ts';
 import { KvStore } from './store.ts';
+import { spokenText } from './spoken.ts';
 import { cueEvent, type CueAction, type CueDef, type Manifest, type MountOptions, type NarratorEventHandler, type StoreValue } from './types.ts';
 
 export type Narrator = {
@@ -43,7 +44,8 @@ function fireActions(
 }
 
 function resolveText(cue: CueDef, locale: string, sourceLang: string): string {
-  return cue.text[locale] || cue.text[sourceLang] || Object.values(cue.text)[0] || '';
+  const raw = cue.text[locale] || cue.text[sourceLang] || Object.values(cue.text)[0] || '';
+  return spokenText(raw);
 }
 
 function resolveAudio(cue: CueDef, locale: string, sourceLang: string, base: URL): string | undefined {

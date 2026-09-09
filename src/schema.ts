@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import YAML from 'yaml';
-import type { CueAction, StoreSnapshot, StoreValue } from './types.ts';
+import type { CueAction, StoreSnapshot, StoreValue, WhenSnapshot, WhenValue } from './types.ts';
 
 export type ProjectConfig = {
   source_lang: string;
@@ -16,8 +16,8 @@ export type ProjectConfig = {
 export type ScenarioCue = {
   on?: string;
   once?: string;
-  when?: StoreSnapshot;
-  unless?: StoreSnapshot;
+  when?: WhenSnapshot;
+  unless?: WhenSnapshot;
   text: string;
   at_start?: CueAction[];
   finally?: CueAction[];
@@ -27,6 +27,29 @@ export type ScenarioCue = {
 export type ScenarioFile = {
   cues: ScenarioCue[];
 };
+
+function asWhenValue(item: unknown): WhenValue | undefined {
+  if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') return item;
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+  const row = item as Record<string, unknown>;
+  const cond: { lt?: number; lte?: number; gt?: number; gte?: number } = {};
+  for (const op of ['lt', 'lte', 'gt', 'gte'] as const) {
+    if (typeof row[op] === 'number' && Number.isFinite(row[op])) cond[op] = row[op];
+  }
+  return cond.lt !== undefined || cond.lte !== undefined || cond.gt !== undefined || cond.gte !== undefined
+    ? cond
+    : undefined;
+}
+
+function asWhen(value: unknown): WhenSnapshot | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: WhenSnapshot = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    const parsed = asWhenValue(item);
+    if (parsed !== undefined) out[key] = parsed;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 
 function asStore(value: unknown): StoreSnapshot | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -116,8 +139,8 @@ export function parseScenario(raw: string): ScenarioFile {
     if (!once && !on) continue;
     cues.push({
       ...(once ? { once } : { on }),
-      when: asStore(row.when),
-      unless: asStore(row.unless),
+      when: asWhen(row.when),
+      unless: asWhen(row.unless),
       text: row.text,
       at_start: asActions(row.at_start),
       finally: asActions(row.finally),

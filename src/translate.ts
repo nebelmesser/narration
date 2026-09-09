@@ -38,6 +38,7 @@ export async function translateLocale(options: {
   let lastErrors: string[] = [];
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    console.log(`translate ${options.locale}: attempt ${attempt + 1}/${maxAttempts}`);
     const result = await options.client.chat.send({
       chatRequest: {
         model: options.model,
@@ -54,6 +55,7 @@ export async function translateLocale(options: {
     const parsed = parseLocaleMap(text, ids);
     if (parsed.ok) return parsed.data;
     lastErrors = parsed.errors;
+    console.log(`translate ${options.locale}: retry (${lastErrors.length} ${lastErrors.length === 1 ? 'error' : 'errors'})`);
     messages.push({ role: 'user', content: lastErrors.join('\n') });
   }
 

@@ -8,6 +8,7 @@ import { sha256 } from './hash.ts';
 import { parseConfig, parseScenario, type ProjectConfig, type ScenarioFile } from './schema.ts';
 import { cueEvent } from './types.ts';
 import { translateLocale } from './translate.ts';
+import { spokenText } from './spoken.ts';
 import { synthesizeSpeech } from './tts.ts';
 import type { LocaleFile } from './validate.ts';
 
@@ -98,6 +99,10 @@ function uiKey(id: string): string {
   return `ui.${id}`;
 }
 
+function log(message: string): void {
+  console.log(message);
+}
+
 export async function syncProject(options: SyncOptions): Promise<void> {
   const dir = options.dir;
   loadEnv(join(process.cwd(), '.env'));
@@ -129,6 +134,13 @@ export async function syncProject(options: SyncOptions): Promise<void> {
   }
 
   const allIds = [...scenario.cues.map((cue) => cueEvent(cue)), ...uiIds.map(uiKey)];
+  const flags = [
+    options.sourceOnly ? '--source-only' : '',
+    options.dryRun ? '--dry-run' : '',
+    options.forceIds === true ? '--force' : Array.isArray(options.forceIds) ? `--force ${options.forceIds.join(' ')}` : '',
+  ].filter(Boolean);
+  log(`sync ${dir}${flags.length ? ` ${flags.join(' ')}` : ''}`);
+  log(`${scenario.cues.length} cues, ${uiIds.length} ui strings; locales ${config.locales.join(', ')}`);
 
   const changed: Record<string, string[]> = {};
   for (const locale of config.locales) {
@@ -156,6 +168,17 @@ export async function syncProject(options: SyncOptions): Promise<void> {
     return;
   }
 
+  const translateTotal = Object.values(changed).reduce((n, ids) => n + ids.length, 0);
+  if (translateTotal) {
+    for (const [locale, ids] of Object.entries(changed)) {
+      if (ids.length) log(`translate ${locale}: ${ids.length} ${ids.length === 1 ? 'id' : 'ids'}`);
+    }
+  } else if (options.sourceOnly) {
+    log('translate: skipped (--source-only)');
+  } else {
+    log('translate: nothing to do');
+  }
+
   if (apiNeeded) {
     const key = process.env.OPENROUTER_API_KEY;
     if (!key) {
@@ -172,6 +195,7 @@ export async function syncProject(options: SyncOptions): Promise<void> {
           const existing = locales[locale][id]?.text;
           sources[id] = existing ? { source: sourceText, existing } : { source: sourceText };
         }
+        log(`translate ${locale}: requesting ${Object.keys(sources).length}...`);
         const translated = await translateLocale({
           client,
           model: config.openrouter.translate_model,
@@ -179,6 +203,7 @@ export async function syncProject(options: SyncOptions): Promise<void> {
           locale,
           sources,
         });
+        log(`translate ${locale}: wrote ${Object.keys(translated).length}`);
         for (const [id, entry] of Object.entries(translated)) {
           const frozen = locales[locale][id]?.frozen;
           locales[locale][id] = { text: entry.text, frozen };
@@ -204,23 +229,38 @@ export async function syncProject(options: SyncOptions): Promise<void> {
     }
   }
 
+  if (options.sourceOnly) {
+    log('tts: skipped (--source-only)');
+  } else if (!ttsNeeded.length) {
+    log('tts: nothing to do');
+  } else {
+    log(`tts: ${ttsNeeded.length} ${ttsNeeded.length === 1 ? 'file' : 'files'}`);
+  }
+
   if (ttsNeeded.length) {
     const key = process.env.OPENROUTER_API_KEY;
     if (!key) {
       console.warn('skipping TTS: OPENROUTER_API_KEY is missing');
     } else {
       const client = new OpenRouter({ apiKey: key });
-      for (const item of ttsNeeded) {
+      for (let i = 0; i < ttsNeeded.length; i++) {
+        const item = ttsNeeded[i];
         const voice = config.openrouter.voices[item.locale];
         if (!voice) {
           console.warn(`skipping TTS for ${item.locale}/${item.id}: no voice in config`);
           continue;
         }
+        const spoken = spokenText(item.text);
+        if (!spoken) {
+          log(`tts ${i + 1}/${ttsNeeded.length} ${item.locale}/${item.id}: skip (empty after stripping markup)`);
+          continue;
+        }
+        log(`tts ${i + 1}/${ttsNeeded.length} ${item.locale}/${item.id}`);
         await synthesizeSpeech({
           client,
           model: config.openrouter.tts_model,
           voice,
-          text: item.text,
+          text: spoken,
           outPath: join(dir, 'audio', item.locale, `${item.id}.mp3`),
         });
       }
@@ -264,7 +304,8 @@ export async function syncProject(options: SyncOptions): Promise<void> {
   }
   writeManifest(dir, manifest);
   if (uiIds.length) writeUiJson(dir, config, uiIds, locales);
-  if (options.sourceOnly) {
-    console.log('source-only: updated manifest and source locale without translation or TTS');
-  }
+  const wrote = ['i18n', 'manifest.json'];
+  if (uiIds.length) wrote.push('ui.json');
+  if (!options.sourceOnly) wrote.push('.sync-lock.json');
+  log(`wrote ${wrote.join(', ')}`);
 }
